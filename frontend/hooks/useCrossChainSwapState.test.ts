@@ -48,7 +48,9 @@ describe('useCrossChainSwapState', () => {
     expect(result.current.sourceChainId).toBe('ethereum-sepolia');
     expect(result.current.destChainId).toBe('stellar');
     expect(result.current.corridorId).toBe('evm-to-stellar');
-    expect(result.current.executable).toBe(false);
+    // evm->stellar is a proven testnet CCTP backend route, so the
+    // catalogued corridor is executable (settlement still gates on /api/v2).
+    expect(result.current.executable).toBe(true);
   });
 
   it('marks default Stellar → Sepolia as catalog-executable', () => {
@@ -64,11 +66,14 @@ describe('useCrossChainSwapState', () => {
   it('does not allow review for catalogued coming-soon corridors', () => {
     const { result } = renderHook(() =>
       useCrossChainSwapState({
-        initialSourceChainId: 'ethereum-sepolia',
+        initialSourceChainId: 'bitcoin',
         initialDestChainId: 'stellar',
       })
     );
 
+    expect(result.current.corridorId).toBe('bitcoin-to-stellar');
+    expect(result.current.availability).toBe('coming_soon');
+    expect(result.current.executable).toBe(false);
     expect(result.current.canReview).toBe(false);
   });
 });
