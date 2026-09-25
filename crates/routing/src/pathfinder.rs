@@ -316,6 +316,8 @@ mod tests {
             liquidity: 100, // Very thin liquidity
             price: 0.1,
             fee_bps: 0,
+            provider: None,
+            bridge: None,
         }]
     }
 
@@ -328,6 +330,8 @@ mod tests {
             liquidity: 10_000_000,
             price: 0.1,
             fee_bps: 0,
+            provider: None,
+            bridge: None,
         }]
     }
 
@@ -385,6 +389,8 @@ mod tests {
                 liquidity: 10_000_000,
                 price: 1.0,
                 fee_bps: 0,
+                provider: None,
+                bridge: None,
             },
             LiquidityEdge {
                 from: "B".to_string(),
@@ -394,6 +400,8 @@ mod tests {
                 liquidity: 10_000_000,
                 price: 1.0,
                 fee_bps: 0,
+                provider: None,
+                bridge: None,
             },
         ];
 
