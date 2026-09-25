@@ -1252,6 +1252,51 @@ components:
           format: int64
           description: Unix timestamp when the quote was generated
           example: 1740312000
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (ms) when this quote expires and should be considered stale
+          example: 1700000030000
+        source_timestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp (ms) of the underlying data source (e.g. orderbook snapshot)
+          example: 1700000000000
+        ttl_seconds:
+          type: integer
+          format: int32
+          description: Time-to-live in seconds for client-side staleness detection
+          example: 30
+        price_impact:
+          type: string
+          description: Estimated price impact percentage
+          example: "0.12"
+        data_freshness:
+          type: object
+          description: Freshness metadata about the data sources used to compute this quote
+          properties:
+            fresh_count:
+              type: integer
+              description: Number of fresh candidates used to compute the quote
+              example: 2
+            stale_count:
+              type: integer
+              description: Number of stale candidates excluded from the quote
+              example: 0
+            max_staleness_secs:
+              type: integer
+              format: int64
+              description: Maximum observed staleness in seconds among all evaluated candidates
+              example: 0
+        midpoint:
+          type: string
+          description: Market midpoint price (average of best bid and best ask across all venues)
+          example: "0.1054000"
+        spread_bps:
+          type: integer
+          format: int32
+          description: Market spread in basis points
+          example: 8
 
     RouteResponse:
       type: object
