@@ -8,14 +8,19 @@
 #[cfg(test)]
 mod tests {
     fn runbook() -> String {
-        // Path relative to workspace root; tests run with cwd = workspace root.
-        std::fs::read_to_string("docs/runbooks/quote-inspector.md")
-            .expect("docs/runbooks/quote-inspector.md not found — was it created?")
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/runbooks/quote-inspector.md"
+        ))
+        .expect("docs/runbooks/quote-inspector.md not found — was it created?")
     }
 
     fn openapi_yaml() -> String {
-        std::fs::read_to_string("docs/api/openapi.yaml")
-            .expect("docs/api/openapi.yaml not found")
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/api/openapi.yaml"
+        ))
+        .expect("docs/api/openapi.yaml not found")
     }
 
     // Feature: quote-inspector-operator-guide, Property 1: all documented QuoteResponse field names exist in the schema

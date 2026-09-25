@@ -3,6 +3,8 @@
 use sqlx::PgPool;
 use tracing::warn;
 
+use crate::error::Result;
+
 /// A health score record to persist.
 /// Mirrors `stellarroute_routing::health::scorer::HealthRecord` but is
 /// defined here to avoid a hard dependency on the routing crate.
@@ -26,9 +28,10 @@ impl HealthScoreWriter {
 
     /// Insert a health score record.
     ///
-    /// DB errors are logged at `warn` level and swallowed — they must never
-    /// propagate to the routing path.
-    pub async fn write(&self, record: &HealthScoreRecord) -> Result<(), ()> {
+    /// DB errors are logged at `warn` level and returned to the caller so the
+    /// caller can skip counting them as persisted. They must never propagate to
+    /// the routing path, so callers are expected to handle this as non-fatal.
+    pub async fn write(&self, record: &HealthScoreRecord) -> Result<()> {
         let result = sqlx::query(
             r#"
             insert into venue_health_scores (venue_ref, venue_type, score, signals, computed_at)
@@ -49,6 +52,7 @@ impl HealthScoreWriter {
                 error = %e,
                 "Failed to persist health score; continuing without error"
             );
+            return Err(e.into());
         }
 
         Ok(())

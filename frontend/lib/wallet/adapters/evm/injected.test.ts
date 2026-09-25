@@ -186,7 +186,7 @@ describe('injected EVM adapter', () => {
     ).toBe('not_connected');
   });
 
-  it('reports no_backend_route after connect when signing is available', async () => {
+  it('reports chain_signing_available after connect for a backend route', async () => {
     const request = vi.fn(async ({ method }: { method: string }) => {
       if (method === 'eth_requestAccounts') return ['0xabc'];
       if (method === 'eth_accounts') return ['0xabc'];
@@ -201,6 +201,6 @@ describe('injected EVM adapter', () => {
         sourceChain: 'evm',
         destinationChain: 'stellar',
       }).code
-    ).toBe('no_backend_route');
+    ).toBe('chain_signing_available');
   });
 });
