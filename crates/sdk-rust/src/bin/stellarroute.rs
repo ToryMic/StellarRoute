@@ -4,7 +4,7 @@ use std::ffi::OsStr;
 use std::num::NonZeroUsize;
 use stellarroute_sdk::{
     HealthResponse, OrderbookLevel, OrderbookResponse, PairsResponse, QuoteRequest, QuoteResponse,
-    QuoteType, Route, RouteHop, RoutesRequest, RoutesResponse, SdkError, StellarRouteClient,
+    QuoteType, RoutesRequest, RoutesResponse, SdkError, StellarRouteClient,
 };
 
 const EXIT_SUCCESS: i32 = 0;
