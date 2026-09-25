@@ -631,8 +631,16 @@ fn format_routes(response: &RoutesResponse, output: OutputFormat) -> Result<Stri
             let mut lines = vec![
                 format!(
                     "pair: {} / {}",
-                    if base_name.is_empty() { "(base)" } else { &base_name },
-                    if quote_name.is_empty() { "(quote)" } else { &quote_name }
+                    if base_name.is_empty() {
+                        "(base)"
+                    } else {
+                        &base_name
+                    },
+                    if quote_name.is_empty() {
+                        "(quote)"
+                    } else {
+                        &quote_name
+                    }
                 ),
                 format!("amount: {}", response.amount),
                 format!("routes: {}", response.routes.len()),
@@ -744,7 +752,15 @@ fn format_routes(response: &RoutesResponse, output: OutputFormat) -> Result<Stri
                         "route #{} hops\n{}",
                         idx + 1,
                         format_table(
-                            &["hop", "from", "to", "price", "source", "fee_bps", "amount_out"],
+                            &[
+                                "hop",
+                                "from",
+                                "to",
+                                "price",
+                                "source",
+                                "fee_bps",
+                                "amount_out"
+                            ],
                             hop_rows
                         )
                     ));
@@ -1101,9 +1117,15 @@ step | from   | to   | price     | source
 
     #[test]
     fn rejects_non_integer_route_amount() {
-        let error =
-            Cli::try_parse_from(["stellarroute", "routes", "native", "USDC", "--amount", "1.5"])
-                .expect_err("decimal amount should fail");
+        let error = Cli::try_parse_from([
+            "stellarroute",
+            "routes",
+            "native",
+            "USDC",
+            "--amount",
+            "1.5",
+        ])
+        .expect_err("decimal amount should fail");
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
@@ -1127,8 +1149,7 @@ step | from   | to   | price     | source
     #[test]
     fn snapshot_routes_output_table() {
         let rendered = normalize_for_snapshot(
-            &format_routes(&sample_routes_response(), OutputFormat::Table)
-                .expect("should format"),
+            &format_routes(&sample_routes_response(), OutputFormat::Table).expect("should format"),
         );
         insta::assert_snapshot!(rendered, @r###"
         amount: 10000000
