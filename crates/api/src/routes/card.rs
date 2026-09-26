@@ -1,0 +1,254 @@
+//! Card program routes — additive, flag-gated preview surfaces (CARD-38).
+//!
+//! These endpoints are intentionally minimal and fail-closed:
+//! - When `CARD_ENABLED` is unset or anything other than `"true"`, every
+//!   handler returns `404 not_found` (`card disabled`). StellarRoute never
+//!   holds API keys or card PANs; no PAN, card number, CVV/CVC, or expiry
+//!   field exists on any request or response schema here.
+//! - When `CARD_ENABLED=true`, handlers return static, non-sensitive shapes
+//!   so SDK and frontend integrators can build against a stable contract
+//!   without touching the live swap/quote path.
+//!
+//! Nothing in this module touches:
+//! - classic one-hop SDEX prepare → sign → submit (`routes::swap`),
+//! - quote selection / ranking (`routes::quote`),
+//! - CORS allowlists, `CCTP_ENABLED` default, or existing OpenAPI field names.
+
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use utoipa::ToSchema;
+
+use crate::{error::ApiError, models::ApiResponse, state::AppState};
+
+/// Returns `true` only when `CARD_ENABLED=true` (case-insensitive, trimmed).
+///
+/// Unset, empty, or any other value means disabled. This keeps the new
+/// routes invisible (`404`) in production unless an operator explicitly opts
+/// in — the same fail-closed posture as `CCTP_ENABLED`.
+pub fn card_enabled() -> bool {
+    std::env::var("CARD_ENABLED")
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+fn card_disabled() -> ApiError {
+    ApiError::NotFound("card disabled".to_string())
+}
+
+// ── Schemas (no PANs, no secrets) ────────────────────────────────────────────
+
+/// Card program health — `enabled: false` is the 404-disabled shape the
+/// JS/Rust SDKs normalize to instead of surfacing an error.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CardHealth {
+    /// Whether the card program is enabled on this deployment.
+    pub enabled: bool,
+}
+
+/// Minimal application draft. Integrators POST a caller-chosen reference and
+/// display name only — never a card number, expiry, or CVV.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CardApplicationDraft {
+    /// Caller-chosen idempotency / applicant reference (opaque string).
+    pub applicant_ref: String,
+    /// Display name for the application (not a PAN, not a key).
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+/// Validation outcome for a draft application.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CardApplicationValidation {
+    /// Whether the draft passed validation.
+    pub valid: bool,
+    /// Echo of the submitted applicant reference.
+    pub applicant_ref: String,
+}
+
+/// A single card authorization (webhook-derived view model).
+///
+/// `decline_code` is a short machine code (e.g. `insufficient_funds`);
+/// frontends map it to plain language. No PAN fields are present by design.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CardAuthorization {
+    /// Stable authorization identifier; dismiss state keys off this.
+    pub id: String,
+    /// Authorization status: `approved`, `declined`, or `pending`.
+    pub status: String,
+    /// Machine-readable decline code when `status == "declined"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decline_code: Option<String>,
+    /// Decimal amount string (e.g. `"12.50"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// ISO-4217 currency code (e.g. `"USD"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// RFC-3339 timestamp when the authorization was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+
+/// List response for card authorizations.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct CardAuthorizationsResponse {
+    pub authorizations: Vec<CardAuthorization>,
+    pub total: usize,
+}
+
+// ── Handlers ─────────────────────────────────────────────────────────────────
+
+/// GET /api/v1/card/health
+#[utoipa::path(
+    get,
+    path = "/api/v1/card/health",
+    tag = "card",
+    responses(
+        (status = 200, description = "Card program health", body = ApiResponse<CardHealth>),
+        (status = 404, description = "Card program disabled", body = crate::models::ErrorResponse),
+    )
+)]
+pub async fn card_health(
+    State(_state): State<Arc<AppState>>,
+    request_id: crate::middleware::RequestId,
+) -> Result<impl IntoResponse, ApiError> {
+    if !card_enabled() {
+        return Err(card_disabled());
+    }
+    let body = ApiResponse::new(
+        CardHealth { enabled: true },
+        request_id.as_str().to_string(),
+    );
+    Ok((StatusCode::OK, Json(body)))
+}
+
+/// POST /api/v1/card/applications/validate
+#[utoipa::path(
+    post,
+    path = "/api/v1/card/applications/validate",
+    tag = "card",
+    request_body(content = CardApplicationDraft, description = "Draft card application to validate"),
+    responses(
+        (status = 200, description = "Validation outcome", body = ApiResponse<CardApplicationValidation>),
+        (status = 400, description = "Validation error", body = crate::models::ErrorResponse),
+        (status = 404, description = "Card program disabled", body = crate::models::ErrorResponse),
+    )
+)]
+pub async fn validate_card_application(
+    State(_state): State<Arc<AppState>>,
+    request_id: crate::middleware::RequestId,
+    Json(draft): Json<CardApplicationDraft>,
+) -> Result<impl IntoResponse, ApiError> {
+    if !card_enabled() {
+        return Err(card_disabled());
+    }
+    if draft.applicant_ref.trim().is_empty() {
+        return Err(ApiError::Validation(
+            "applicant_ref must not be empty".to_string(),
+        ));
+    }
+    let body = ApiResponse::new(
+        CardApplicationValidation {
+            valid: true,
+            applicant_ref: draft.applicant_ref,
+        },
+        request_id.as_str().to_string(),
+    );
+    Ok((StatusCode::OK, Json(body)))
+}
+
+/// GET /api/v1/card/authorizations
+#[utoipa::path(
+    get,
+    path = "/api/v1/card/authorizations",
+    tag = "card",
+    responses(
+        (status = 200, description = "Recent card authorizations", body = ApiResponse<CardAuthorizationsResponse>),
+        (status = 404, description = "Card program disabled", body = crate::models::ErrorResponse),
+    )
+)]
+pub async fn list_card_authorizations(
+    State(_state): State<Arc<AppState>>,
+    request_id: crate::middleware::RequestId,
+) -> Result<impl IntoResponse, ApiError> {
+    if !card_enabled() {
+        return Err(card_disabled());
+    }
+    // Empty by default; integrators render the paused sentence when there is
+    // nothing declined to show. No seed data, no PANs.
+    let body = ApiResponse::new(
+        CardAuthorizationsResponse {
+            authorizations: Vec::new(),
+            total: 0,
+        },
+        request_id.as_str().to_string(),
+    );
+    Ok((StatusCode::OK, Json(body)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn card_disabled_by_default_when_env_unset() {
+        let prev = std::env::var("CARD_ENABLED").ok();
+        std::env::remove_var("CARD_ENABLED");
+        assert!(!card_enabled());
+        if let Some(v) = prev {
+            std::env::set_var("CARD_ENABLED", v);
+        }
+    }
+
+    #[test]
+    fn card_enabled_only_on_true() {
+        let prev = std::env::var("CARD_ENABLED").ok();
+        std::env::set_var("CARD_ENABLED", "true");
+        assert!(card_enabled());
+        std::env::set_var("CARD_ENABLED", "false");
+        assert!(!card_enabled());
+        std::env::set_var("CARD_ENABLED", "1");
+        assert!(!card_enabled());
+        match prev {
+            Some(v) => std::env::set_var("CARD_ENABLED", v),
+            None => std::env::remove_var("CARD_ENABLED"),
+        }
+    }
+
+    #[test]
+    fn card_schemas_carry_no_pan_fields() {
+        let health = serde_json::to_value(CardHealth { enabled: true }).unwrap();
+        let draft = serde_json::to_value(CardApplicationDraft {
+            applicant_ref: "ref-1".into(),
+            display_name: Some("Ada".into()),
+        })
+        .unwrap();
+        let auth = serde_json::to_value(CardAuthorization {
+            id: "auth-1".into(),
+            status: "declined".into(),
+            decline_code: Some("insufficient_funds".into()),
+            amount: Some("12.50".into()),
+            currency: Some("USD".into()),
+            created_at: Some("2026-09-25T00:00:00Z".into()),
+        })
+        .unwrap();
+        for v in [health, draft, auth] {
+            let s = serde_json::to_string(&v).unwrap().to_lowercase();
+            for forbidden in [
+                "pan",
+                "card_number",
+                "cardnumber",
+                "cvv",
+                "cvc",
+                "expiry",
+                "exp_month",
+            ] {
+                assert!(
+                    !s.contains(forbidden),
+                    "card schema must not contain {forbidden}: {s}"
+                );
+            }
+        }
+    }
+}

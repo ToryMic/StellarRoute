@@ -1104,3 +1104,51 @@ export type ApiErrorCode =
   | 'network_mismatch' // SDK specific — prepare vs integrator passphrase
   | 'unknown_error' // SDK specific
   | (string & Record<never, never>);
+
+// ── Card program preview (CARD-36, additive) ──────────────────────────────────
+// Flag-gated behind CARD_ENABLED on the backend (404 when disabled).
+// No PAN, card number, CVV/CVC, or expiry fields — never hold sensitive data.
+
+/** Card program health (`GET /api/v1/card/health`). */
+export interface CardHealth {
+  /** Whether the card program is enabled on this deployment. */
+  enabled: boolean;
+}
+
+/** Draft card application (`POST /api/v1/card/applications/validate`). */
+export interface CardApplicationDraft {
+  /** Caller-chosen applicant reference (opaque string). */
+  applicant_ref: string;
+  /** Optional display name (not a PAN, not a key). */
+  display_name?: string;
+}
+
+/** Validation outcome for a draft card application. */
+export interface CardApplicationValidation {
+  /** Whether the draft passed validation. */
+  valid: boolean;
+  /** Echo of the submitted applicant reference. */
+  applicant_ref: string;
+}
+
+/** A single card authorization (webhook-derived view model). */
+export interface CardAuthorization {
+  /** Stable authorization identifier; dismiss state keys off this. */
+  id: string;
+  /** Authorization status: `approved`, `declined`, or `pending`. */
+  status: string;
+  /** Machine-readable decline code when `status === "declined"`. */
+  decline_code?: string;
+  /** Decimal amount string (e.g. `"12.50"`). */
+  amount?: string;
+  /** ISO-4217 currency code (e.g. `"USD"`). */
+  currency?: string;
+  /** RFC-3339 timestamp when the authorization was created. */
+  created_at?: string;
+}
+
+/** List response for card authorizations. */
+export interface CardAuthorizationsResponse {
+  authorizations: CardAuthorization[];
+  total: number;
+}
