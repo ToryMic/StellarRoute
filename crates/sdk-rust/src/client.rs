@@ -26,9 +26,11 @@ use reqwest::{header, Url};
 use crate::{
     error::{ApiErrorCode, RateLimitInfo, Result, SdkError},
     types::{
-        BatchQuoteRequest, BatchQuoteResponse, ErrorResponse, HealthResponse, OrderbookResponse,
-        PairsResponse, QuoteRequest, QuoteResponse, RoutesRequest, RoutesResponse,
-        SwapPrepareRequest, SwapPrepareResponse, SwapSubmitRequest, SwapSubmitResponse,
+        BatchQuoteRequest, BatchQuoteResponse, CardApplicationDraft, CardApplicationValidation,
+        CardAuthorization, CardAuthorizationsResponse, CardHealth, ErrorResponse, HealthResponse,
+        OrderbookResponse, PairsResponse, QuoteRequest, QuoteResponse, RoutesRequest,
+        RoutesResponse, SwapPrepareRequest, SwapPrepareResponse, SwapSubmitRequest,
+        SwapSubmitResponse,
     },
 };
 
@@ -328,6 +330,50 @@ impl StellarRouteClient {
             .await
     }
 
+    // ── Card program preview (CARD-37, additive, flag-gated) ──────────────────
+    // New routes return 404 when `CARD_ENABLED` is unset/false. `card_health`
+    // normalizes that to `CardHealth::disabled()` instead of panicking or
+    // surfacing a new required error path; existing methods are untouched.
+
+    /// `GET /api/v1/card/health` — card program health.
+    ///
+    /// A `404` (flag-gated preview disabled) becomes
+    /// `Ok(CardHealth { enabled: false })`, never a panic. Any other error
+    /// is propagated unchanged.
+    pub async fn card_health(&self) -> Result<CardHealth> {
+        match self.get_unwrapped::<CardHealth>("api/v1/card/health").await {
+            Ok(health) => Ok(health),
+            Err(e) if e.status_code() == Some(404) => Ok(CardHealth::disabled()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `POST /api/v1/card/applications/validate` — validate a draft.
+    ///
+    /// Posts the draft as-is.
+    pub async fn validate_card_application(
+        &self,
+        draft: CardApplicationDraft,
+    ) -> Result<CardApplicationValidation> {
+        self.post_unwrapped("api/v1/card/applications/validate", &draft)
+            .await
+    }
+
+    /// `GET /api/v1/card/authorizations` — list recent card authorizations.
+    ///
+    /// Returns the fixture-backed authorization list. A `404` (disabled)
+    /// becomes an empty list rather than an error panic.
+    pub async fn list_card_authorizations(&self) -> Result<Vec<CardAuthorization>> {
+        match self
+            .get_unwrapped::<CardAuthorizationsResponse>("api/v1/card/authorizations")
+            .await
+        {
+            Ok(resp) => Ok(resp.authorizations),
+            Err(e) if e.status_code() == Some(404) => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn url(&self, path: &str) -> Result<Url> {
@@ -339,6 +385,29 @@ impl StellarRouteClient {
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = self.url(path)?;
         self.execute_with_retry(|| self.http.get(url.clone())).await
+    }
+
+    /// GET that unwraps the `{ data: T }` API envelope when present,
+    /// falling back to a flat body (fixtures, mocks).
+    async fn get_unwrapped<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = self.url(path)?;
+        let body: serde_json::Value = self
+            .execute_with_retry(|| self.http.get(url.clone()))
+            .await?;
+        unwrap_api_data(body)
+    }
+
+    /// POST that unwraps the `{ data: T }` API envelope when present.
+    async fn post_unwrapped<T, B>(&self, path: &str, body: &B) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+        B: serde::Serialize,
+    {
+        let url = self.url(path)?;
+        let wire: serde_json::Value = self
+            .execute_with_retry(|| self.http.post(url.clone()).json(body))
+            .await?;
+        unwrap_api_data(wire)
     }
 
     async fn execute_with_retry<T, F>(&self, build_request: F) -> Result<T>
@@ -433,6 +502,19 @@ impl StellarRouteClient {
 }
 
 // ── Rate-limit header extraction ──────────────────────────────────────────────
+
+/// Unwrap `{ data: T }` API envelopes when present; otherwise use the body
+/// as-is (flat fixtures and mocks).
+fn unwrap_api_data<T: serde::de::DeserializeOwned>(body: serde_json::Value) -> Result<T> {
+    if let Some(data) = body.get("data") {
+        // Bare `{"data": [...]}` array shape (fixtures) or object shape.
+        if !data.is_null() {
+            return serde_json::from_value(data.clone()).map_err(Into::into);
+        }
+    }
+    // Flat body, or `{ authorizations, total }` without the outer envelope.
+    serde_json::from_value(body).map_err(Into::into)
+}
 
 fn encode_path_segment(segment: &str) -> String {
     segment

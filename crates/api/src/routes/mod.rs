@@ -5,6 +5,7 @@ pub mod admin;
 pub mod admin_cache;
 pub mod assets;
 pub mod canary;
+pub mod card;
 pub mod contract_registry;
 pub mod health;
 pub mod idempotent_quote;
@@ -212,6 +213,18 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         // yet — see `routes::swap` module docs.
         .route("/api/v1/swap/prepare", post(swap::prepare_swap))
         .route("/api/v1/swap/submit", post(swap::submit_swap))
+        // Card program preview (CARD-38, issues #1495-#1498): additive,
+        // flag-gated behind CARD_ENABLED (default off → 404). Never touches
+        // the live swap/quote path.
+        .route("/api/v1/card/health", get(card::card_health))
+        .route(
+            "/api/v1/card/applications/validate",
+            post(card::validate_card_application),
+        )
+        .route(
+            "/api/v1/card/authorizations",
+            get(card::list_card_authorizations),
+        )
         // Replay routes are registered above via `operator_routes`.
         // Admin routes
         .route(
@@ -245,6 +258,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/v1/contracts/registry/:contract_name/network/:network",
             get(contract_registry::get_contract_version_by_network),
+        )
+        // Agent intent validation (AI-11)
+        .route(
+            "/api/v1/agent/intents/validate",
+            post(crate::agent::validate_intent),
         )
         // WebSocket quote stream (real-time quotes)
         .route("/ws", get(ws::ws_handler))

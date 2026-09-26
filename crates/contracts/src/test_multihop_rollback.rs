@@ -214,6 +214,40 @@ fn test_failure_at_hop_index_1() {
 }
 
 #[test]
+fn test_mid_route_failure_leaves_balances_unchanged() {
+    let env = setup_env();
+    let (_, client) = deploy_router(&env);
+    let healthy = deploy_pool_99(&env);
+    let failing = deploy_pool_fail(&env);
+    client.register_pool(&healthy);
+    client.register_pool(&failing);
+    let sender = Address::generate(&env);
+    let vol_before = client.get_total_swap_volume();
+    let events_before = env.events().all().len();
+    let result = client.try_execute_swap(
+        &sender,
+        &swap_params(
+            &env,
+            multi_pool_route(&env, &[healthy, failing]),
+            100,
+            0,
+            sender.clone(),
+        ),
+    );
+    assert_eq!(result, Err(Ok(ContractError::AmmSwapCallFailed)));
+    assert_eq!(
+        client.get_total_swap_volume(),
+        vol_before,
+        "mid-route failure must not commit partial volume"
+    );
+    assert_eq!(
+        env.events().all().len(),
+        events_before,
+        "mid-route failure must not emit partial events"
+    );
+}
+
+#[test]
 fn test_failure_at_hop_index_2_three_hop() {
     let env = setup_env();
     let (_, client) = deploy_router(&env);

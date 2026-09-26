@@ -446,9 +446,10 @@ mod tests {
     #[test]
     fn payload_hash_uses_shared_helper() {
         let cfg = CctpConfig::default_testnet();
-        let xdr = "AAAAAgAAAADuBg+afmvWN9+nlruudR93UO1rDpTe8i6yxgPgBKoBVwAAAGQAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAAA==";
-        let h1 = payload_hash_from_envelope_xdr(xdr, &cfg).unwrap();
-        let h2 = payload_hash_from_envelope_xdr(xdr, &cfg).unwrap();
+        let prepared = include_str!("testdata/mint_prepare_unsigned.xdr.b64").trim();
+        let signed = include_str!("testdata/mint_submit_signed.xdr.b64").trim();
+        let h1 = payload_hash_from_envelope_xdr(prepared, &cfg).unwrap();
+        let h2 = payload_hash_from_envelope_xdr(signed, &cfg).unwrap();
         assert_eq!(h1, h2);
     }
 
