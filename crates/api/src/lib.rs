@@ -3,6 +3,7 @@
 //! Provides REST API endpoints for price quotes and orderbook data.
 
 pub mod admin_audit;
+pub mod agent;
 pub mod audit;
 pub mod broadcast;
 pub mod budget;
