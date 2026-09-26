@@ -366,4 +366,229 @@ mod tests {
             "concurrent-update mixed snapshot must be rejected"
         );
     }
+
+    // ── Serde round-trips ───────────────────────────────────────────────────
+    //
+    // None of the types in this module enable `serde(deny_unknown_fields)`,
+    // so deserialization *tolerates* unknown fields (they are ignored) and
+    // serialization never emits fields beyond the ones declared here. The
+    // round-trip tests below pin both halves of that contract: a payload we
+    // emit must read back identically, and a payload from a *newer* producer
+    // (extra fields) must still deserialize into the current shape instead of
+    // erroring or silently dropping required fields.
+
+    /// Multi-venue fixture: SDEX, Soroban AMM, and a cross-chain bridge hop
+    /// captured under a single snapshot id.
+    fn multi_venue_hops(snapshot: u64) -> Vec<ValidatedHop> {
+        vec![
+            ValidatedHop {
+                snapshot_id: SnapshotId(snapshot),
+                venue_ref: "sdex_xlm_usdc".to_string(),
+                source_asset: "XLM".to_string(),
+                destination_asset: "USDC".to_string(),
+            },
+            ValidatedHop {
+                snapshot_id: SnapshotId(snapshot),
+                venue_ref: "amm_phoenix_usdc_btc".to_string(),
+                source_asset: "USDC".to_string(),
+                destination_asset: "BTC".to_string(),
+            },
+            ValidatedHop {
+                snapshot_id: SnapshotId(snapshot),
+                venue_ref: "bridge_base_btc_eth".to_string(),
+                source_asset: "BTC".to_string(),
+                destination_asset: "ETH".to_string(),
+            },
+        ]
+    }
+
+    /// A `SwapPath` mirroring [`multi_venue_hops`] for the uniform-snapshot API.
+    fn multi_venue_path() -> SwapPath {
+        SwapPath {
+            hops: multi_venue_hops(0)
+                .iter()
+                .map(|h| crate::pathfinder::PathHop {
+                    source_asset: h.source_asset.clone(),
+                    destination_asset: h.destination_asset.clone(),
+                    venue_type: if h.venue_ref.starts_with("sdex") {
+                        "sdex".to_string()
+                    } else if h.venue_ref.starts_with("amm") {
+                        "soroban_amm".to_string()
+                    } else {
+                        "bridge".to_string()
+                    },
+                    venue_ref: h.venue_ref.clone(),
+                    price: 1.0,
+                    fee_bps: 30,
+                    provider: None,
+                    bridge: None,
+                })
+                .collect(),
+            estimated_output: 250_000,
+        }
+    }
+
+    #[test]
+    fn test_snapshot_id_json_round_trip() {
+        let id = SnapshotId(8_675_309);
+        let json = serde_json::to_string(&id).expect("snapshot id should serialize");
+        // Newtype struct: the wire form is the bare u64, not an object.
+        assert_eq!(json, "8675309");
+        let decoded: SnapshotId =
+            serde_json::from_str(&json).expect("snapshot id should deserialize");
+        assert_eq!(decoded, id);
+    }
+
+    #[test]
+    fn test_snapshot_id_display_is_stable() {
+        assert_eq!(SnapshotId(42).to_string(), "snapshot#42");
+    }
+
+    #[test]
+    fn test_validated_hop_json_round_trip() {
+        let hops = multi_venue_hops(7);
+        let single = &hops[1];
+        let json = serde_json::to_string(single).expect("hop should serialize");
+        let decoded: ValidatedHop = serde_json::from_str(&json).expect("hop should deserialize");
+        assert_eq!(decoded.snapshot_id, single.snapshot_id);
+        assert_eq!(decoded.venue_ref, single.venue_ref);
+        assert_eq!(decoded.source_asset, single.source_asset);
+        assert_eq!(decoded.destination_asset, single.destination_asset);
+    }
+
+    #[test]
+    fn test_validated_hop_json_field_names_are_stable() {
+        let hops = multi_venue_hops(7);
+        let value = serde_json::to_value(&hops[0]).expect("hop should serialize");
+        let obj = value.as_object().expect("hop should be a JSON object");
+        assert_eq!(obj.len(), 4, "hop JSON must not grow new fields");
+        for field in [
+            "snapshot_id",
+            "venue_ref",
+            "source_asset",
+            "destination_asset",
+        ] {
+            assert!(obj.contains_key(field), "missing hop field `{field}`");
+        }
+    }
+
+    #[test]
+    fn test_multi_venue_hops_round_trip_and_still_validate() {
+        let hops = multi_venue_hops(1_234_567);
+        let json = serde_json::to_string(&hops).expect("hops should serialize");
+        let decoded: Vec<ValidatedHop> =
+            serde_json::from_str(&json).expect("hops should deserialize");
+        assert_eq!(decoded.len(), 3, "multi-venue fixture must keep 3 venues");
+
+        // Round-trip must preserve every venue and every asset leg.
+        for (original, back) in hops.iter().zip(decoded.iter()) {
+            assert_eq!(back.snapshot_id, original.snapshot_id);
+            assert_eq!(back.venue_ref, original.venue_ref);
+            assert_eq!(back.source_asset, original.source_asset);
+            assert_eq!(back.destination_asset, original.destination_asset);
+        }
+
+        // And the decoded hops must still satisfy snapshot isolation, i.e.
+        // the round-trip did not lose the snapshot stamping.
+        let v = strict_validator();
+        assert!(v.validate_hops(&decoded).is_ok());
+        assert_eq!(v.metrics().violations(), 0);
+    }
+
+    #[test]
+    fn test_multi_venue_path_uniform_round_trip_and_validate() {
+        let path = multi_venue_path();
+        let json = serde_json::to_string(&path).expect("path should serialize");
+        let decoded: SwapPath = serde_json::from_str(&json).expect("path should deserialize");
+        assert_eq!(decoded.hops.len(), 3);
+        assert_eq!(decoded.estimated_output, path.estimated_output);
+
+        let v = strict_validator();
+        assert!(v.validate_path_uniform(&decoded, SnapshotId(99)).is_ok());
+    }
+
+    #[test]
+    fn test_mixed_snapshots_survive_round_trip_as_typed_diff() {
+        let v = strict_validator();
+        let mut hops = multi_venue_hops(1_000);
+        hops[2].snapshot_id = SnapshotId(1_001);
+
+        let err = v
+            .validate_hops(&hops)
+            .expect_err("mixed snapshots must be rejected");
+        let json = serde_json::to_string(&err).expect("error should serialize");
+        let decoded: SnapshotIsolationError =
+            serde_json::from_str(&json).expect("error should deserialize");
+        match decoded {
+            SnapshotIsolationError::MixedSnapshots {
+                hop_index,
+                expected_snapshot,
+                hop_snapshot,
+                venue_ref,
+            } => {
+                assert_eq!(hop_index, 2);
+                assert_eq!(expected_snapshot, SnapshotId(1_000));
+                assert_eq!(hop_snapshot, SnapshotId(1_001));
+                assert_eq!(venue_ref, "bridge_base_btc_eth");
+            }
+            other => panic!("unexpected error after round-trip: {other}"),
+        }
+    }
+
+    #[test]
+    fn test_empty_path_error_round_trips() {
+        let err = SnapshotIsolationError::EmptyPath;
+        let json = serde_json::to_string(&err).expect("error should serialize");
+        let decoded: SnapshotIsolationError =
+            serde_json::from_str(&json).expect("error should deserialize");
+        assert!(matches!(decoded, SnapshotIsolationError::EmptyPath));
+    }
+
+    #[test]
+    fn test_validator_config_round_trips_both_strictness_modes() {
+        for strict in [true, false] {
+            let config = SnapshotValidatorConfig { strict };
+            let json = serde_json::to_string(&config).expect("config should serialize");
+            let decoded: SnapshotValidatorConfig =
+                serde_json::from_str(&json).expect("config should deserialize");
+            assert_eq!(decoded.strict, strict);
+        }
+
+        // Default stays strict, and the default round-trips to strict.
+        let default_json = serde_json::to_string(&SnapshotValidatorConfig::default())
+            .expect("default config should serialize");
+        assert_eq!(default_json, "{\"strict\":true}");
+    }
+
+    #[test]
+    fn test_unknown_fields_are_tolerated_on_deserialize() {
+        // `serde(deny_unknown_fields)` is intentionally NOT enabled on this
+        // module's types, so a payload written by a newer producer that adds
+        // fields must still deserialize. This documents that tolerance and
+        // guards against someone adding `deny_unknown_fields` later and
+        // breaking replay of previously persisted snapshots.
+        let json = r#"{
+            "snapshot_id": 5,
+            "venue_ref": "amm_future_pool",
+            "source_asset": "USDC",
+            "destination_asset": "BTC",
+            "future_field": {"nested": [1, 2, 3]}
+        }"#;
+        let hop: ValidatedHop =
+            serde_json::from_str(json).expect("unknown fields must be ignored, not rejected");
+        assert_eq!(hop.snapshot_id, SnapshotId(5));
+        assert_eq!(hop.venue_ref, "amm_future_pool");
+        assert_eq!(hop.source_asset, "USDC");
+        assert_eq!(hop.destination_asset, "BTC");
+    }
+
+    #[test]
+    fn test_missing_required_field_is_still_rejected() {
+        // Tolerance is only for *extra* fields: dropping a required field must
+        // still fail loudly rather than yielding a half-populated hop.
+        let json = r#"{"snapshot_id": 5, "venue_ref": "pool"}"#;
+        let err = serde_json::from_str::<ValidatedHop>(json)
+            .expect_err("missing required fields must be rejected");
+        assert!(!err.to_string().is_empty());
+    }
 }

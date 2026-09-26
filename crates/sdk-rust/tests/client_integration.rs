@@ -756,14 +756,18 @@ async fn pairs_empty_response_deserializes() {
 #[tokio::test]
 async fn pairs_large_page_deserializes() {
     let server = mock_server().await;
-    let pairs: Vec<serde_json::Value> = (0..100).map(|i| serde_json::json!({
-        "base": "XLM",
-        "counter": format!("TOKEN{}", i),
-        "base_asset": "native",
-        "counter_asset": format!("TOKEN{}:GABCD", i),
-        "offer_count": i + 1,
-        "last_updated": "2026-03-25T11:59:00Z"
-    })).collect();
+    let pairs: Vec<serde_json::Value> = (0..100)
+        .map(|i| {
+            serde_json::json!({
+                "base": "XLM",
+                "counter": format!("TOKEN{}", i),
+                "base_asset": "native",
+                "counter_asset": format!("TOKEN{}:GABCD", i),
+                "offer_count": i + 1,
+                "last_updated": "2026-03-25T11:59:00Z"
+            })
+        })
+        .collect();
 
     Mock::given(method("GET"))
         .and(path("/api/v1/pairs"))
@@ -883,11 +887,17 @@ async fn orderbook_alphanum12_asset_deserializes() {
         .mount(&server)
         .await;
 
-    let resp = client(&server).orderbook("native", "CUSTOMASSET").await.unwrap();
+    let resp = client(&server)
+        .orderbook("native", "CUSTOMASSET")
+        .await
+        .unwrap();
     assert!(resp.base_asset.is_native());
     assert!(!resp.quote_asset.is_native());
     assert_eq!(resp.quote_asset.asset_code, Some("CUSTOMASSET".to_string()));
-    assert_eq!(resp.quote_asset.asset_issuer, Some("GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890".to_string()));
+    assert_eq!(
+        resp.quote_asset.asset_issuer,
+        Some("GABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890".to_string())
+    );
 }
 
 // ── Orderbook: validation error ──────────────────────────────────────────────────
