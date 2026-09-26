@@ -76,11 +76,34 @@ Telemetry is used to understand user interactions and route selection behavior w
 
 ---
 
-## Sensitive Data Stripping
+## 4. Agent Telemetry Events
+
+* **Trigger**: Dispatched during agent intent parsing, user confirmation, and cancellation.
+* **Environment Guard**: Respects `NEXT_PUBLIC_TELEMETRY_ENABLED`. If set to `false`, no telemetry events are dispatched.
+
+### Event Names
+
+| eventName | Trigger | Payload Keys |
+|---|---|---|
+| `agent_intent_parsed` | Intent is successfully parsed from user message | `eventName`, `kind` |
+| `agent_confirm` | User explicitly clicks Confirm on intent preview | `eventName`, `kind` |
+| `agent_cancel` | User clicks Cancel on intent preview card | `eventName`, `kind` |
+
+### Payload Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `eventName` | `'agent_intent_parsed' \| 'agent_confirm' \| 'agent_cancel'` | Agent event identifier |
+| `kind` | `'convert' \| 'send' \| 'receive' \| 'bridge' \| 'offramp' \| 'subscribe' \| 'balance'` | Intent category |
+
+### Sensitive Data Stripping
 
 The payload intentionally excludes:
 - Exact trade amounts
+- Destination addresses, recipient accounts, or public keys
+- Memo text or user-typed message body
 - Wallet addresses or public keys
 - Identifiable network IP information
 - Raw price impact numbers (categorized into tiers instead)
 - Full error strings that may embed account ids or XDR
+- Secret parameters or auth credentials
