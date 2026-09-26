@@ -1,10 +1,10 @@
 use clap::{builder::TypedValueParser, CommandFactory, Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
 use stellarroute_sdk::{
     HealthResponse, OrderbookLevel, OrderbookResponse, PairsResponse, QuoteRequest, QuoteResponse,
-    QuoteType, Route, RouteHop, RoutesRequest, RoutesResponse, SdkError, StellarRouteClient,
+    QuoteType, RoutesRequest, RoutesResponse, SdkError, StellarRouteClient,
 };
 
 const EXIT_SUCCESS: i32 = 0;
@@ -141,6 +141,11 @@ enum Commands {
         )]
         slippage_bps: Option<u16>,
     },
+    #[command(
+        about = "Check agent preview health",
+        long_about = "Calls GET /api/v1/agent/health and prints enabled or disabled."
+    )]
+    AgentHealth,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -278,6 +283,7 @@ async fn run(cli: Cli) -> Result<String, (i32, String)> {
         )
         .await
         .map_err(|error| (exit_code_for_sdk_error(&error), error.to_string())),
+        Commands::AgentHealth => render_agent_health(&cli.api_url, cli.output).await,
     }
 }
 
@@ -288,6 +294,91 @@ async fn render_health(
     let response = client.health().await?;
 
     format_health(&response, output)
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentHealthResponse {
+    #[serde(default)]
+    enabled: bool,
+    #[allow(dead_code)]
+    #[serde(default)]
+    execution: Option<String>,
+}
+
+/// Read the agent preview health endpoint without changing any SDK or API
+/// contract. A 404 is the expected fail-closed response while `AI_AGENT_ENABLED`
+/// is unset or false.
+async fn render_agent_health(api_url: &str, output: OutputFormat) -> Result<String, (i32, String)> {
+    let url = format!("{}/api/v1/agent/health", api_url.trim_end_matches('/'));
+    let response = reqwest::get(&url).await.map_err(|error| {
+        (
+            EXIT_RUNTIME_ERROR,
+            format!("agent health request failed: {error}"),
+        )
+    })?;
+    let status = response.status();
+
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(format_agent_health_disabled(output));
+    }
+
+    let body = response.text().await.map_err(|error| {
+        (
+            EXIT_RUNTIME_ERROR,
+            format!("failed to read agent health response: {error}"),
+        )
+    })?;
+
+    if !status.is_success() {
+        return Err((
+            EXIT_RUNTIME_ERROR,
+            format!("agent health request failed with status {status}"),
+        ));
+    }
+
+    let payload: AgentHealthResponse = serde_json::from_str(&body).map_err(|error| {
+        (
+            EXIT_RUNTIME_ERROR,
+            format!("invalid agent health response: {error}"),
+        )
+    })?;
+
+    if !payload.enabled {
+        return Ok(format_agent_health_disabled(output));
+    }
+
+    match output {
+        OutputFormat::Human => Ok("enabled".to_string()),
+        OutputFormat::Table => Ok(format_table(
+            &["field", "value"],
+            vec![vec!["status".to_string(), "enabled".to_string()]],
+        )),
+        OutputFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+            "enabled": true,
+            "status": "enabled",
+        }))
+        .map_err(|error| {
+            (
+                EXIT_RUNTIME_ERROR,
+                format!("failed to encode agent health: {error}"),
+            )
+        }),
+    }
+}
+
+fn format_agent_health_disabled(output: OutputFormat) -> String {
+    match output {
+        OutputFormat::Human => "disabled".to_string(),
+        OutputFormat::Table => format_table(
+            &["field", "value"],
+            vec![vec!["status".to_string(), "disabled".to_string()]],
+        ),
+        OutputFormat::Json => serde_json::json!({
+            "enabled": false,
+            "status": "disabled",
+        })
+        .to_string(),
+    }
 }
 
 async fn render_pairs(
@@ -631,8 +722,16 @@ fn format_routes(response: &RoutesResponse, output: OutputFormat) -> Result<Stri
             let mut lines = vec![
                 format!(
                     "pair: {} / {}",
-                    if base_name.is_empty() { "(base)" } else { &base_name },
-                    if quote_name.is_empty() { "(quote)" } else { &quote_name }
+                    if base_name.is_empty() {
+                        "(base)"
+                    } else {
+                        &base_name
+                    },
+                    if quote_name.is_empty() {
+                        "(quote)"
+                    } else {
+                        &quote_name
+                    }
                 ),
                 format!("amount: {}", response.amount),
                 format!("routes: {}", response.routes.len()),
@@ -744,7 +843,15 @@ fn format_routes(response: &RoutesResponse, output: OutputFormat) -> Result<Stri
                         "route #{} hops\n{}",
                         idx + 1,
                         format_table(
-                            &["hop", "from", "to", "price", "source", "fee_bps", "amount_out"],
+                            &[
+                                "hop",
+                                "from",
+                                "to",
+                                "price",
+                                "source",
+                                "fee_bps",
+                                "amount_out"
+                            ],
                             hop_rows
                         )
                     ));
@@ -867,11 +974,74 @@ fn parse_asset(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellarroute_sdk::{ApiErrorCode, AssetInfo, PathStep, TradingPair};
+    use stellarroute_sdk::{ApiErrorCode, AssetInfo, PathStep, Route, RouteHop, TradingPair};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     #[test]
     fn clap_help_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    #[tokio::test]
+    async fn agent_health_404_prints_disabled_and_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/agent/health"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let output = render_agent_health(&server.uri(), OutputFormat::Human)
+            .await
+            .expect("404 should mean disabled");
+
+        assert_eq!(output, "disabled");
+    }
+
+    #[tokio::test]
+    async fn agent_health_200_prints_enabled() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/agent/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "enabled": true,
+                "execution": "preview_only",
+            })))
+            .mount(&server)
+            .await;
+
+        let output = render_agent_health(&server.uri(), OutputFormat::Human)
+            .await
+            .expect("200 should mean enabled");
+
+        assert_eq!(output, "enabled");
+    }
+
+    #[tokio::test]
+    async fn agent_health_500_is_not_treated_as_disabled() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/agent/health"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let (code, message) = render_agent_health(&server.uri(), OutputFormat::Human)
+            .await
+            .expect_err("500 should be a runtime error");
+
+        assert_eq!(code, EXIT_RUNTIME_ERROR);
+        assert!(message.contains("500"));
+    }
+
+    #[test]
+    fn parses_agent_health_command() {
+        let cli = Cli::try_parse_from(["stellarroute", "agent-health"])
+            .expect("agent-health command should parse");
+        assert!(matches!(cli.command, Commands::AgentHealth));
     }
 
     #[test]
@@ -1101,9 +1271,15 @@ step | from   | to   | price     | source
 
     #[test]
     fn rejects_non_integer_route_amount() {
-        let error =
-            Cli::try_parse_from(["stellarroute", "routes", "native", "USDC", "--amount", "1.5"])
-                .expect_err("decimal amount should fail");
+        let error = Cli::try_parse_from([
+            "stellarroute",
+            "routes",
+            "native",
+            "USDC",
+            "--amount",
+            "1.5",
+        ])
+        .expect_err("decimal amount should fail");
         assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
@@ -1127,8 +1303,7 @@ step | from   | to   | price     | source
     #[test]
     fn snapshot_routes_output_table() {
         let rendered = normalize_for_snapshot(
-            &format_routes(&sample_routes_response(), OutputFormat::Table)
-                .expect("should format"),
+            &format_routes(&sample_routes_response(), OutputFormat::Table).expect("should format"),
         );
         insta::assert_snapshot!(rendered, @r###"
         amount: 10000000

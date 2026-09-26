@@ -5,15 +5,15 @@
 //! | Field                          | Before                                    | After                        |
 //! |--------------------------------|-------------------------------------------|------------------------------|
 //! | `inputs.base` / `inputs.quote` | `"USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"` | `"USDC:[REDACTED]"` |
-//! | `selected.path[*].from`        | `"USDC:GBBD47…"`                          | `"USDC:[REDACTED]"`          |
-//! | `selected.path[*].to`          | `"USDC:GBBD47…"`                          | `"USDC:[REDACTED]"`          |
+//! | `selected.path[*].from`        | `"USDC:GBBD47."`                          | `"USDC:[REDACTED]"`          |
+//! | `selected.path[*].to`          | `"USDC:GBBD47."`                          | `"USDC:[REDACTED]"`          |
 //!
 //! # What is NOT redacted
 //!
-//! - `venue_ref` — offer IDs and pool addresses are public on-chain data.
-//! - `price`, `amount`, `slippage_bps` — non-identifying numeric values.
-//! - `request_id`, `trace_id` — correlation IDs that must remain intact.
-//! - `strategy`, `source` — internal labels with no PII.
+//! - `venue_ref` - offer IDs and pool addresses are public on-chain data.
+//! - `price`, `amount`, `slippage_bps` - non-identifying numeric values.
+//! - `request_id`, `trace_id` - correlation IDs that must remain intact.
+//! - `strategy`, `source` - internal labels with no PII.
 //!
 //! # Relationship to `replay::Redactor`
 //!
@@ -73,9 +73,9 @@ impl AuditRedactor {
 
 /// Redact the issuer portion of a canonical asset string.
 ///
-/// - `"native"` → `"native"` (unchanged)
-/// - `"USDC"` → `"USDC"` (no issuer — unchanged)
-/// - `"USDC:GBBD47…"` → `"USDC:[REDACTED]"`
+/// - `"native"` ? `"native"` (unchanged)
+/// - `"USDC"` ? `"USDC"` (no issuer - unchanged)
+/// - `"USDC:GBBD47."` ? `"USDC:[REDACTED]"`
 pub fn redact_canonical_asset(s: &str) -> String {
     if s == "native" {
         return s.to_string();
@@ -125,8 +125,37 @@ fn redact_path_step(step: &mut AuditPathStep) {
     step.to = redact_canonical_asset(&step.to);
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ??? Tests ???????????????????????????????????????????????????????????????????
 
+
+/// Keys that must be redacted in card-related audit bodies.
+pub const CARD_SENSITIVE_KEYS: &[&str] = &["pan", "cvv", "cvc", "track", "card_webhook_hmac_key"];
+pub const CARD_REDACTED: &str = REDACTED;
+
+/// Recursively redact card-sensitive keys in a JSON value.
+/// Keeps Stellar addresses and other non-sensitive data intact.
+pub fn redact_card_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if CARD_SENSITIVE_KEYS
+                    .iter()
+                    .any(|key| key.eq_ignore_ascii_case(k))
+                {
+                    *v = serde_json::Value::String(CARD_REDACTED.to_owned());
+                } else {
+                    redact_card_value(v);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                redact_card_value(v);
+            }
+        }
+        _ => {}
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,7 +245,7 @@ mod tests {
     fn venue_ref_is_not_redacted() {
         let mut entry = make_entry_with_issuer(ISSUER);
         AuditRedactor::redact(&mut entry);
-        // venue_ref is public on-chain data — must not be redacted
+        // venue_ref is public on-chain data - must not be redacted
         assert_eq!(entry.selected.as_ref().unwrap().venue_ref, "offer1");
         assert_eq!(entry.exclusions[0].venue_ref, "pool1");
     }
@@ -284,7 +313,7 @@ mod tests {
         );
     }
 
-    // ── Account redaction tests ───────────────────────────────────────────────
+    // ?? Account redaction tests ???????????????????????????????????????????????
 
     const ACCOUNT: &str = "GABCD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
@@ -323,9 +352,9 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    // ── Extra issuer / secret fixtures (issue #1305) ─────────────────────────
+    // ?? Extra issuer / secret fixtures (issue #1305) ?????????????????????????
 
-    /// A second, unrelated issuer — proves redaction is not keyed to one fixture.
+    /// A second, unrelated issuer - proves redaction is not keyed to one fixture.
     const OTHER_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 
     #[test]
@@ -383,9 +412,9 @@ mod tests {
 
     #[test]
     fn account_boundary_lengths_are_handled() {
-        // 11 chars — below the 12-char guard, so fully replaced.
+        // 11 chars - below the 12-char guard, so fully replaced.
         assert_eq!(AuditRedactor::redact_account("GABCDEFGHIJ"), REDACTED);
-        // 12 chars — the shortest input that keeps a prefix/suffix fingerprint.
+        // 12 chars - the shortest input that keeps a prefix/suffix fingerprint.
         let redacted = AuditRedactor::redact_account("GABCDEFGHIJK");
         assert!(redacted.starts_with("GABC"));
         assert!(redacted.contains("..."));
@@ -436,7 +465,7 @@ mod tests {
         assert!(!redacted.contains("cafe"));
     }
 
-    // ── Property-based tests ──────────────────────────────────────────────────
+    // ?? Property-based tests ??????????????????????????????????????????????????
 
     prop_compose! {
         /// Arbitrary Stellar-like issuer address (56 chars, starts with G).
