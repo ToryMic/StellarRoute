@@ -1,5 +1,10 @@
 import type {
   ApiErrorCode,
+  CardApplicationDraft,
+  CardApplicationValidation,
+  CardAuthorization,
+  CardAuthorizationsResponse,
+  CardHealth,
   ExecuteSwapParams,
   ExecuteSwapResult,
   HealthStatus,
@@ -927,6 +932,86 @@ export class StellarRouteClient {
       cctpAccessHeaders(options),
     );
     return unwrapApiData<CctpReattestResponse>(body);
+  }
+
+  // ── Card program preview (CARD-36, additive, flag-gated) ────────────────────
+  // New routes return 404 when CARD_ENABLED is unset/false. `cardHealth`
+  // normalizes that to `{ enabled: false }` instead of throwing, so existing
+  // callers never see a new required error path.
+
+  /**
+   * `GET /api/v1/card/health` — card program health.
+   *
+   * Returns `{ enabled: false }` when the backend answers 404 (flag-gated
+   * preview disabled) instead of throwing. Existing methods are untouched.
+   */
+  async cardHealth(signal?: AbortSignal): Promise<CardHealth> {
+    try {
+      const body = await this.request<unknown>(
+        '/api/v1/card/health',
+        signal,
+        this.retries,
+        'GET',
+        undefined,
+      );
+      return unwrapApiData<CardHealth>(body);
+    } catch (err) {
+      if (isStellarRouteApiError(err) && err.status === 404) {
+        return { enabled: false };
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * `POST /api/v1/card/applications/validate` — validate a draft application.
+   *
+   * Posts the draft as-is (no new required arguments on the existing client).
+   */
+  async validateCardApplication(
+    draft: CardApplicationDraft,
+    signal?: AbortSignal,
+  ): Promise<CardApplicationValidation> {
+    const body = await this.request<unknown>(
+      '/api/v1/card/applications/validate',
+      signal,
+      this.retries,
+      'POST',
+      draft,
+    );
+    return unwrapApiData<CardApplicationValidation>(body);
+  }
+
+  /**
+   * `GET /api/v1/card/authorizations` — list recent card authorizations.
+   *
+   * Accepts both the envelope `{ data: { authorizations, total } }` and flat
+   * `{ authorizations, total }` shapes, plus a bare array for fixtures.
+   */
+  async listCardAuthorizations(
+    signal?: AbortSignal,
+  ): Promise<CardAuthorization[]> {
+    const body = await this.request<unknown>(
+      '/api/v1/card/authorizations',
+      signal,
+      this.retries,
+      'GET',
+      undefined,
+    );
+    const unwrapped = unwrapApiData<
+      CardAuthorizationsResponse | CardAuthorization[]
+    >(body);
+    if (Array.isArray(unwrapped)) return unwrapped;
+    if (
+      unwrapped !== null &&
+      typeof unwrapped === 'object' &&
+      Array.isArray(
+        (unwrapped as CardAuthorizationsResponse).authorizations,
+      )
+    ) {
+      return (unwrapped as CardAuthorizationsResponse).authorizations;
+    }
+    return [];
   }
 
   // ── Internal helpers ────────────────────────────────────────────────────────

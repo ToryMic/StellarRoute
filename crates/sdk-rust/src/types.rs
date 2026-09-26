@@ -482,6 +482,79 @@ impl SwapSubmitResponse {
     }
 }
 
+// ── Card program preview (CARD-37, additive, flag-gated) ──────────────────────
+// Backend is fail-closed behind `CARD_ENABLED` (404 when disabled) and never
+// holds keys or card PANs. No PAN, card number, CVV/CVC, or expiry field may
+// be added here.
+
+/// Card program health (`GET /api/v1/card/health`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardHealth {
+    /// Whether the card program is enabled on this deployment.
+    pub enabled: bool,
+}
+
+impl CardHealth {
+    /// Disabled shape returned when the backend answers 404.
+    pub fn disabled() -> Self {
+        Self { enabled: false }
+    }
+
+    /// Returns `true` when the card program is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+}
+
+/// Draft card application (`POST /api/v1/card/applications/validate`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardApplicationDraft {
+    /// Caller-chosen applicant reference (opaque string).
+    pub applicant_ref: String,
+    /// Optional display name (not a PAN, not a key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// Validation outcome for a draft card application.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardApplicationValidation {
+    /// Whether the draft passed validation.
+    pub valid: bool,
+    /// Echo of the submitted applicant reference.
+    pub applicant_ref: String,
+}
+
+/// A single card authorization (webhook-derived view model).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardAuthorization {
+    /// Stable authorization identifier; dismiss state keys off this.
+    pub id: String,
+    /// Authorization status: `approved`, `declined`, or `pending`.
+    pub status: String,
+    /// Machine-readable decline code when `status == "declined"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decline_code: Option<String>,
+    /// Decimal amount string (e.g. `"12.50"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// ISO-4217 currency code (e.g. `"USD"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// RFC-3339 timestamp when the authorization was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+
+/// List response for card authorizations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardAuthorizationsResponse {
+    #[serde(default)]
+    pub authorizations: Vec<CardAuthorization>,
+    #[serde(default)]
+    pub total: usize,
+}
+
 // ── Internal error response ───────────────────────────────────────────────────
 
 /// Wire format of the API error body — used internally by the client.
