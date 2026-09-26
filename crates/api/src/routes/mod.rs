@@ -259,6 +259,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             "/api/v1/contracts/registry/:contract_name/network/:network",
             get(contract_registry::get_contract_version_by_network),
         )
+        // Agent intent validation (AI-11)
+        .route(
+            "/api/v1/agent/intents/validate",
+            post(crate::agent::validate_intent),
+        )
         // WebSocket quote stream (real-time quotes)
         .route("/ws", get(ws::ws_handler))
         .with_state(state)

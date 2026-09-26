@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { IntentPreviewCard, type ParsedAgentIntent } from './IntentPreviewCard';
 import { emitAgentTelemetry, type AgentIntentKind } from './telemetry';
+import { validateIntent } from '@/lib/ai/client';
 import { ArrowRight } from 'lucide-react';
 
 export function parsePromptToIntent(text: string): ParsedAgentIntent | null {
@@ -122,25 +123,52 @@ export function parsePromptToIntent(text: string): ParsedAgentIntent | null {
 export function AgentChat() {
   const [input, setInput] = React.useState('');
   const [activeIntent, setActiveIntent] = React.useState<ParsedAgentIntent | null>(null);
+  const [validationError, setValidationError] = React.useState<string | null>(null);
+  const [isValidating, setIsValidating] = React.useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
     const parsed = parsePromptToIntent(input);
     if (parsed) {
       emitAgentTelemetry('agent_intent_parsed', parsed.kind);
-      setActiveIntent(parsed);
+
+      // Try to validate the intent with the server
+      setIsValidating(true);
+      setValidationError(null);
+      try {
+        await validateIntent(parsed);
+        // Validation succeeded or agent is disabled
+        setActiveIntent(parsed);
+      } catch (error) {
+        // Validation failed, show error
+        const errorMessage = error instanceof Error ? error.message : 'Validation failed';
+        setValidationError(errorMessage);
+        emitAgentTelemetry('agent_validation_failed', parsed.kind);
+      } finally {
+        setIsValidating(false);
+      }
     }
     setInput('');
   };
 
   const handleCancel = () => {
     setActiveIntent(null);
+    setValidationError(null);
   };
 
   return (
     <div className="space-y-6" data-testid="agent-chat-container">
+      {validationError && (
+        <div
+          data-testid="validation-error"
+          className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          {validationError}
+        </div>
+      )}
+
       {activeIntent && (
         <IntentPreviewCard
           intent={activeIntent}
@@ -156,10 +184,16 @@ export function AgentChat() {
           placeholder="Ask the agent (e.g. swap 10 XLM to USDC, send 5 USDC to G...)"
           className="flex-1"
           data-testid="agent-chat-input"
+          disabled={isValidating}
         />
-        <Button type="submit" data-testid="agent-chat-submit" className="gap-1.5">
+        <Button
+          type="submit"
+          data-testid="agent-chat-submit"
+          className="gap-1.5"
+          disabled={isValidating}
+        >
           <ArrowRight className="h-4 w-4" />
-          Send
+          {isValidating ? 'Validating...' : 'Send'}
         </Button>
       </form>
     </div>
